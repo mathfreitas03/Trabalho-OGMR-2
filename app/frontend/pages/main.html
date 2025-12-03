@@ -1,0 +1,403 @@
+<!doctype html>
+<html lang="pt-BR">
+<head>
+<meta charset="utf-8" />
+<meta name="viewport" content="width=device-width, initial-scale=1" />
+<title>Gerenciador de Portas</title>
+
+<link href="css/bootstrap.min.css" rel="stylesheet">
+
+<style>
+:root { --verde-escuro:#064e3b; }
+body { background:#f7faf7; }
+.locked { opacity:0.6; }
+.port-state { font-weight:600; }
+.btn-lock { min-width:48px; }
+.small-muted { color:#6b6f6b; }
+.timer-input { max-width:200px; }
+</style>
+</head>
+
+<body>
+
+<nav class="navbar navbar-expand-lg" style="background:var(--verde-escuro);">
+<div class="container-fluid">
+<a class="navbar-brand text-white" id="navbar-title">Gerenciador de Portas - Admin</a>
+</div>
+</nav>
+
+<main class="container py-4">
+
+<div class="card p-3 mb-4">
+<div class="d-flex gap-3 align-items-center">
+
+<div>
+<label class="form-label small-muted">Switch</label>
+<select id="switchSelect" class="form-select"></select>
+</div>
+
+<div>
+<label class="form-label small-muted">Filtro</label>
+<input id="filterText" class="form-control" placeholder="IP">
+</div>
+
+<button id="refreshBtn" class="btn btn-outline-secondary mt-4">Atualizar</button>
+
+<div class="ms-auto d-flex gap-2">
+<button id="selectAllBtn" class="btn btn-sm btn-secondary">Selecionar todos</button>
+<button id="blockSelectedBtn" class="btn btn-success btn-sm">Bloquear selecionados</button>
+<button id="unblockSelectedBtn" class="btn btn-outline-danger btn-sm">Desbloquear selecionados</button>
+</div>
+
+</div>
+</div>
+
+<div class="card">
+<div class="table-responsive">
+<table class="table table-hover mb-0">
+<thead class="table-light">
+<tr>
+<th></th>
+<th>Switch</th>
+<th>Porta</th>
+<th>Host</th>
+<th>IP</th>
+<th>MAC</th>
+<th>Status</th>
+<th>Ações</th>
+</tr>
+</thead>
+<tbody id="portsTableBody"></tbody>
+</table>
+</div>
+</div>
+
+</main>
+
+<!-- Modal -->
+<div class="modal fade" id="timerModal">
+<div class="modal-dialog modal-sm">
+  <div class="modal-content">
+    <div class="modal-header">
+      <h5>Tempo de Bloqueio</h5>
+      <button class="btn-close" data-bs-dismiss="modal"></button>
+    </div>
+    <div class="modal-body">
+      <input id="timerTargetIds" type="hidden"/>
+      <div class="mb-2 small-muted">Defina o tempo (O valor 0 bloqueará a porta por 10 segundos)</div>
+
+      <input id="timerValue" type="number" class="form-control mb-2" min="0" value="30">
+      <select id="timerUnit" class="form-select">
+        <option value="seconds">Segundos</option>
+        <option value="minutes">Minutos</option>
+        <option value="hours">Horas</option>
+        <option value="days">Dias</option>
+      </select>
+    </div>
+    <div class="modal-footer">
+      <button class="btn btn-secondary" data-bs-dismiss="modal">Cancelar</button>
+      <button id="applyTimerBtn" class="btn btn-success">Aplicar</button>
+    </div>
+  </div>
+</div>
+</div>
+
+<script src="js/bootstrap.bundle.min.js"></script>
+
+<script>
+
+const date = new Date();
+document.querySelector('#navbar-title').innerHTML =
+  `Gerenciador de Portas - Admin ${date.toLocaleDateString('pt-BR')}`;
+
+// -----------------------
+// CONFIG API
+// -----------------------
+const API = {
+  block: "/api/port/block",
+  unblock: "/api/port/unblock",
+  list: "/api/ports"
+};
+
+// -----------------------
+// ESTADO
+// -----------------------
+let ports = [];
+let selected = new Set();
+
+const tbody = document.getElementById("portsTableBody");
+const switchSelect = document.getElementById("switchSelect");
+const filterText = document.getElementById("filterText");
+
+document.addEventListener("DOMContentLoaded", init);
+
+// -----------------------
+async function init() {
+  setupEvents();
+  await loadPorts();
+  fillSwitchSelect();
+  startPolling();
+}
+
+// -----------------------
+function setupEvents() {
+
+  document.getElementById("refreshBtn").onclick = loadPorts;
+
+  switchSelect.onchange = renderTable;
+
+  filterText.oninput = renderTable;
+
+  document.getElementById("selectAllBtn").onclick = () => {
+    ports.filter(p => p.lockable).forEach(p =>
+      selected.add(makeKey(p))
+    );
+    renderTable();
+  };
+
+  document.getElementById("blockSelectedBtn").onclick = () => {
+    if (!selected.size) return alert("Nada selecionado");
+
+    document.getElementById("timerTargetIds").value =
+      [...selected].join(",");
+
+    new bootstrap.Modal(timerModal).show();
+  };
+
+  document.getElementById("unblockSelectedBtn").onclick =
+    () => postUnblock([...selected]);
+
+  document.getElementById("applyTimerBtn").onclick = () => {
+
+    const ids =
+      document.getElementById("timerTargetIds")
+        .value.split(",");
+
+    let value = Number(document.getElementById("timerValue").value);
+    const unit = document.getElementById("timerUnit").value;
+
+    if (unit === "minutes") value *= 60;
+    if (unit === "hours")   value *= 3600;
+    if (unit === "days")    value *= 86400;
+
+    if (!value) value = 10;
+
+    postBlock(ids, value);
+
+    bootstrap.Modal.getInstance(timerModal).hide();
+  };
+}
+
+// -----------------------
+function fillSwitchSelect() {
+  const switches =
+    [...new Set(ports.map(p => `${p.switchName} (${p.switchIp})`))];
+
+  switchSelect.innerHTML =
+    `<option value="">Todos</option>`;
+
+  switches.forEach(sw => {
+    let o = document.createElement("option");
+    o.value = sw;
+    o.textContent = sw;
+    switchSelect.appendChild(o);
+  });
+}
+
+// -----------------------
+async function loadPorts() {
+
+  const res = await fetch(API.list);
+  const data = await res.json();
+
+  ports = [];
+
+  data.forEach(sw => {
+
+    sw.ports.forEach(p => {
+
+      ports.push({
+        switchIp: sw.ipv4,
+        switchName: sw.name || `Switch ${sw.id}`,
+        portNumber: p.number,
+
+        hostName: p.host_name,
+        ip: p.host_ip,
+        mac: p.host_mac,
+
+        locked: !p.status,
+        lockable: p.lockable
+      });
+
+    });
+  });
+
+  renderTable();
+}
+
+// -----------------------
+function makeKey(p) {
+  return `${p.switchIp}|${p.portNumber}`;
+}
+
+// -----------------------
+function renderTable() {
+
+  const q = filterText.value.toLowerCase();
+  const swFilter = switchSelect.value;
+
+  tbody.innerHTML = "";
+
+  ports
+    .filter(p => {
+
+      if (
+        swFilter &&
+        !`${p.switchName} (${p.switchIp})`
+          .includes(swFilter)
+      ) return false;
+
+      return (
+        !q ||
+        `${p.ip}${p.hostName}${p.mac}`
+          .toLowerCase()
+          .includes(q)
+      );
+    })
+
+    .forEach(p => {
+
+      const key = makeKey(p);
+
+      let tr = document.createElement("tr");
+      if (p.locked) tr.classList.add("locked");
+
+      tr.innerHTML = `
+        <td>
+          <input type="checkbox"
+            ${p.lockable ? "" : "disabled style='display:none'"}
+            ${selected.has(key) ? "checked" : ""}
+          >
+        </td>
+
+        <td>${p.switchName}</td>
+        <td>${p.portNumber}</td>
+
+        <td>${p.hostName || "-"}</td>
+        <td>${p.ip || "-"}</td>
+        <td class="small-muted">${p.mac || "-"}</td>
+
+        <td class="port-state">
+          ${p.locked
+            ? `<span class="badge bg-danger">Bloqueada</span>`
+            : `<span class="badge bg-success">Liberada</span>`
+          }
+        </td>
+
+        <td>
+          <button class="btn btn-sm btn-outline-secondary lockBtn"
+            ${p.lockable ? "" : "disabled"}>
+            ${p.locked ? "🔓" : "🔒"}
+          </button>
+        </td>
+      `;
+
+      tr.querySelector("input").onchange = e =>
+        e.target.checked
+          ? selected.add(key)
+          : selected.delete(key);
+
+      tr.querySelector('.lockBtn').onclick = () =>
+        p.locked
+          ? postUnblock([key])
+          : openTimerModal(key);
+
+      tbody.appendChild(tr);
+    });
+}
+
+// -----------------------
+function openTimerModal(id) {
+  document.getElementById("timerTargetIds").value = id;
+  new bootstrap.Modal(timerModal).show();
+}
+
+// -----------------------
+// REQUISIÇÕES API
+// -----------------------
+async function postBlock(keys, durationSeconds) {
+
+  try {
+
+    for (const key of keys) {
+
+      const [ip, ifIndex] = key.split("|");
+
+      await fetch(API.block, {
+        method: "POST",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify({
+          ip,
+          ifIndex,
+          duration: durationSeconds
+        })
+      });
+    }
+
+    await loadPorts();
+    selected.clear();
+
+  }
+  catch (err) {
+    console.error("BLOCK ERROR:", err);
+    alert("Erro ao bloquear");
+  }
+
+}
+
+async function postUnblock(keys) {
+
+  try {
+
+    for (const key of keys) {
+
+      const [ip, ifIndex] = key.split("|");
+
+      await fetch(API.unblock, {
+        method: "POST",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify({
+          ip,
+          ifIndex
+        })
+      });
+    }
+
+    await loadPorts();
+    selected.clear();
+
+  }
+  catch (err) {
+    console.error("UNBLOCK ERROR:", err);
+    alert("Erro ao desbloquear");
+  }
+}
+
+// -----------------------
+// POLLING AUTOMÁTICO
+// -----------------------
+function startPolling() {
+
+  setInterval(async () => {
+
+    const keep = new Set(selected);
+    await loadPorts();
+
+    selected = keep;
+    renderTable();
+
+  }, 10000);
+
+}
+
+</script>
