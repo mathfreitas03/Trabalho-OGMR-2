@@ -3,8 +3,21 @@ const authMac = require("./auth/mac");
 const path = require("path");
 const db = require("./db");
 const bcrypt = require("bcrypt");
-const { snmpPooling } = require('./snmp/main');
+const { snmp } = require('./snmp/main');
 const { schedulePortAction } = require("./cron/portScheduler");
+const { exec } = require("child_process");
+const { snmpPooling } = require("./snmp/main");
+
+function addCronjob(cronline) {
+  return new Promise((resolve, reject) => {
+    const command = `(crontab -l 2>/dev/null; echo "${cronline}") | crontab -`;
+    exec(command, (error) => {
+      if (error) return reject(error);
+      resolve(true);
+    });
+  });
+}
+
 
 const app = express();
 const PORT = 5500;
@@ -100,15 +113,10 @@ app.get("/api/ports", async (req, res) => {
   try {
     const switchId = req.query.switch;
 
-    // Função que retorna só as rows
-    async function getSwitches() {
-      const result = await db.query('SELECT * FROM switch');
-      return result.rows;
-    }
+    // Buscar todos os switches corretamente (somente rows)
+    const switches = await db.query('SELECT * FROM switch');
 
-    const switches = await getSwitches();
-
-    // Filtra por switch se houver query
+    // Filtrar caso venha ?switch=ID
     const filteredSwitches = switchId
       ? switches.filter(sw => sw.id === Number(switchId))
       : switches;
@@ -116,20 +124,23 @@ app.get("/api/ports", async (req, res) => {
     const result = [];
 
     for (const sw of filteredSwitches) {
+
+      // Sempre retorna array (mesmo se vazio)
       const portsRes = await db.query(
-        "SELECT * FROM port WHERE switch_id = $1",
+        "SELECT * FROM port WHERE switch_id = $1 AND number <= 24",
         [sw.id]
       );
 
       result.push({
         id: sw.id,
-        hostname: sw.hostname,
+        name: sw.hostname,     // <-- o frontend espera "name"
         ipv4: sw.ipv4,
-        ports: portsRes.rows
+        ports: portsRes ?? []  // <-- garante que nunca será undefined
       });
     }
 
     res.json(result);
+
   } catch (err) {
     console.error(err);
     res.status(500).json({ error: "Erro ao buscar portas" });
@@ -149,27 +160,56 @@ app.post("/api/port/block", async (req, res) => {
       });
     }
 
-    await schedulePortAction(
-      ip,
-      Number(ifIndex),
-      "block",
-      Number(duration)
-    );
+    // 1️⃣ BLOQUEIO IMEDIATO (via Node)
+    try {
+      await schedulePortAction(
+        ip,
+        Number(ifIndex),
+        "block"
+      );
+  } catch (snmpErr) {
+      console.error("SNMP ERROR:", snmpErr.message);
 
-    res.json({ success: true });
-
+      // continua, mas avisa que SNMP falhou
+      return res.status(500).json({
+          error: "Falha no SNMP ao bloquear",
+          details: snmpErr.message
+      });
   }
-  catch (err) {
+
+
+    // 2️⃣ AGENDA O DESBLOQUEIO NO CRON
+    const script = path.resolve(__dirname, "portSchedulerCli.js");
+
+    const unblockTime = new Date(Date.now() + Number(duration) * 1000);
+
+    const minute = unblockTime.getMinutes();
+    const hour = unblockTime.getHours();
+    const day = unblockTime.getDate();
+    const month = unblockTime.getMonth() + 1;
+
+    // O cronjob que irá rodar futuramente:
+    const cronLine =
+`${minute} ${hour} ${day} ${month} * /usr/bin/node ${script} ${ip} ${ifIndex} unblock # auto-unblock`;
+
+    await addCronjob(cronLine);
+
+    return res.json({
+      success: true,
+      unblock_scheduled_for: unblockTime.toISOString(),
+      cron: cronLine
+    });
+
+  } catch (err) {
 
     console.error(err);
 
-    res.status(500).json({
+    return res.status(500).json({
       error: "Erro ao bloquear porta",
       message: err.message
     });
 
   }
-
 });
 
 
@@ -213,6 +253,5 @@ app.use(express.static(path.join(__dirname, "frontend")));
 app.listen(PORT, ()=>{
   console.log("Rodando em " + PORT);
 
-  // POOLING SNMP
   snmpPooling();
-});
+})

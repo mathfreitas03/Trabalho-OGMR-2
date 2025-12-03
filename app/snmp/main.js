@@ -34,14 +34,19 @@ async function getSwitches() {
 
 function walk(session, oid) {
   return new Promise((resolve, reject) => {
+    const result = [];
 
-    const data = [];
-
-    session.walk(
+    session.subtree(
       oid,
-      20,
-      vb => data.push(vb),
-      err => err ? reject(err) : resolve(data)
+      (varbinds) => {
+        for (const vb of varbinds) {
+          result.push(vb);  // <-- pega cada varbind individualmente
+        }
+      },
+      (err) => {
+        if (err) reject(err);
+        else resolve(result);
+      }
     );
   });
 }
@@ -55,6 +60,8 @@ async function loadMacPerPort(session) {
   ]);
 
   const macByBridge = {};
+
+  console.log("MACS:", JSON.stringify(macs, null, 2));
 
   for (let i = 0; i < macs.length; i++) {
 
@@ -160,13 +167,17 @@ async function scanAndPersistPorts() {
       console.log("Persistindo atualizações no banco de dados.")
       for (const iface of Object.values(ifaceMap)) {
 
-        if (iface.type !== 6) continue; // só ethernet
+      if (iface.type !== 6) continue; // só ethernet
 
-        const ifIndex = iface.index;
+      const ifIndex = iface.index;
 
-        const status = iface.oper === 1;
+      // ⭐ Filtro: só portas 1 a 24
+      if (ifIndex > 24) continue;
 
-        const macs = macByPort[ifIndex] || [];
+      const status = iface.oper === 1;
+
+      const macs = macByPort[ifIndex] || [];
+
 
         if (macs.length === 0) {
           await savePort(
@@ -207,12 +218,12 @@ async function scanAndPersistPorts() {
 function snmpPooling (){
     setInterval(() => {
       scanAndPersistPorts();
-    }, 30_000); // A cada 30 segundos atualiza o valor do banco.
+    }, 10_000); // A cada 30 segundos atualiza o valor do banco.
 }
 
 async function blockPort(swIp, ifIndex) {
 
-  const session = snmp.createSession(swIp, COMMUNITY_RW);
+  const session = snmp.createSession(swIp, COMMUNITY);
 
   return new Promise((res, rej) => {
 
@@ -236,7 +247,7 @@ async function blockPort(swIp, ifIndex) {
 
 async function unblockPort(swIp, ifIndex) {
 
-  const session = snmp.createSession(swIp, COMMUNITY_RW);
+  const session = snmp.createSession(swIp, COMMUNITY);
 
   return new Promise((res, rej) => {
 
@@ -264,7 +275,7 @@ async function pollSingleInterface(ip, ifIndex) {
 
   try {
 
-    // 1️⃣ Busca tipo e status da interface
+    // Busca tipo e status da interface
     const oids = [
       `${OIDS.ifType}.${ifIndex}`,
       `${OIDS.ifAdminStatus}.${ifIndex}`,

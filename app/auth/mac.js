@@ -44,9 +44,10 @@ async function verifyAdminMAC(ip) {
     // Obtém MAC do IP real
     // const macEncontrado = await getMAC(ip);
 
-    const macEncontrado = '00:aa:06:00:00:01'
-
-    // console.log("MAC Encontrado:", macEncontrado);
+    const macEncontrado = 'D8:43:AE:DF:8A:D1'.toLocaleLowerCase()
+    console.log(macBanco)
+    
+    console.log("MAC Encontrado:", macEncontrado);
 
     if (!macEncontrado || !macBanco)
         return false;

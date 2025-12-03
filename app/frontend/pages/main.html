@@ -214,12 +214,16 @@ async function loadPorts() {
 
   data.forEach(sw => {
 
-    sw.ports.forEach(p => {
+    sw.ports
+      .filter(p => p.number <= 24)   // <<< SÓ PORTAS ATÉ 24
+      .forEach(p => {
 
-      ports.push({
+        ports.push({
         switchIp: sw.ipv4,
         switchName: sw.name || `Switch ${sw.id}`,
+
         portNumber: p.number,
+        ifIndex: p.ifindex,   // <--- ESSENCIAL
 
         hostName: p.host_name,
         ip: p.host_ip,
@@ -227,9 +231,10 @@ async function loadPorts() {
 
         locked: !p.status,
         lockable: p.lockable
-      });
-
     });
+
+
+      });
   });
 
   renderTable();
@@ -239,6 +244,8 @@ async function loadPorts() {
 function makeKey(p) {
   return `${p.switchIp}|${p.portNumber}`;
 }
+
+
 
 // -----------------------
 function renderTable() {

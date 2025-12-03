@@ -48,7 +48,8 @@ async function schedulePortAction(
     console.log(`[BLOCK] ${jobKey} por ${durationSeconds}s`);
 
     if (!durationSeconds || durationSeconds <= 0) {
-      throw new Error("Tempo inválido para bloqueio temporizado");
+      console.log("Valor padrão setado para 10 segundos.");
+      durationSeconds = 10
     }
 
     // bloqueia agora
