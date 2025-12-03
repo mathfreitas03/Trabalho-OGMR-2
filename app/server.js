@@ -4,7 +4,7 @@ const path = require("path");
 const db = require("./db");
 const bcrypt = require("bcrypt");
 
-const { schedulePortAction } = require("./portScheduler");
+const { schedulePortAction } = require("./cron/portScheduler");
 
 const app = express();
 const PORT = 5500;
