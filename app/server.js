@@ -3,7 +3,7 @@ const authMac = require("./auth/mac");
 const path = require("path");
 const db = require("./db");
 const bcrypt = require("bcrypt");
-
+const { snmpPooling } = require('./snmp/main');
 const { schedulePortAction } = require("./cron/portScheduler");
 
 const app = express();
@@ -94,6 +94,49 @@ app.post("/login.html", async (req, res) => {
    API - CONTROLE DE PORTAS
 ================================ */
 
+// Lê estado do banco
+
+app.get("/api/ports", async (req, res) => {
+  try {
+    const switchId = req.query.switch;
+
+    // Função que retorna só as rows
+    async function getSwitches() {
+      const result = await db.query('SELECT * FROM switch');
+      return result.rows;
+    }
+
+    const switches = await getSwitches();
+
+    // Filtra por switch se houver query
+    const filteredSwitches = switchId
+      ? switches.filter(sw => sw.id === Number(switchId))
+      : switches;
+
+    const result = [];
+
+    for (const sw of filteredSwitches) {
+      const portsRes = await db.query(
+        "SELECT * FROM port WHERE switch_id = $1",
+        [sw.id]
+      );
+
+      result.push({
+        id: sw.id,
+        hostname: sw.hostname,
+        ipv4: sw.ipv4,
+        ports: portsRes.rows
+      });
+    }
+
+    res.json(result);
+  } catch (err) {
+    console.error(err);
+    res.status(500).json({ error: "Erro ao buscar portas" });
+  }
+});
+
+
 app.post("/api/port/block", async (req, res) => {
 
   try {
@@ -169,4 +212,7 @@ app.use(express.static(path.join(__dirname, "frontend")));
 
 app.listen(PORT, ()=>{
   console.log("Rodando em " + PORT);
+
+  // POOLING SNMP
+  snmpPooling();
 });

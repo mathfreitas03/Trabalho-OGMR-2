@@ -120,6 +120,8 @@ async function savePort(
 
 async function scanAndPersistPorts() {
 
+    console.log("Executando Pooling SNMP")
+
   const switches = await getSwitches();
 
   for (const sw of switches) {
@@ -155,6 +157,7 @@ async function scanAndPersistPorts() {
       const macByPort = await loadMacPerPort(session);
 
       // 3) Persistir
+      console.log("Persistindo atualizações no banco de dados.")
       for (const iface of Object.values(ifaceMap)) {
 
         if (iface.type !== 6) continue; // só ethernet
@@ -348,7 +351,8 @@ async function pollSingleInterface(ip, ifIndex) {
 module.exports = {
   blockPort,
   unblockPort,
-  pollSingleInterface
+  pollSingleInterface,
+  snmpPooling
 };
 
 // EXEMPLOS
